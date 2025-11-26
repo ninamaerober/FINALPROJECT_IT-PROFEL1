@@ -1,50 +1,131 @@
-import React, { useState } from "react";
-import { Link } from "react-router";
-
-const roomsData = [
-  { id: 1, name: "Deluxe Suite", type: "Suite", price: 5000, status: "Available", image: "deluxe.jpg" },
-  { id: 2, name: "Standard Room", type: "Standard", price: 4500, status: "Available", image: "standard.jpg" },
-  { id: 3, name: "Executive Room", type: "Executive", price: 3000, status: "Available", image: "executive.jpg" },
-  { id: 4, name: "Presidential Suite", type: "Executive", price: 2000, status: "Occupied", image: "presidential.jpg" },
-];
-
-const bookingsData = [
-  { id: 1, room: "Deluxe Suite", checkIn: "2025-11-20", checkOut: "2025-11-22", status: "Confirmed" },
-  { id: 2, room: "Standard Room", checkIn: "2025-11-25", checkOut: "2025-11-27", status: "Pending" },
-];
+import React, { useState, useEffect } from "react";
+import { Link, NavLink } from "react-router";
+import supabase from "../../lib/supabase"; 
+import { LogOut } from "react-feather";
 
 export default function Guest() {
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
   const [feedbackInput, setFeedbackInput] = useState("");
   const [feedbacks, setFeedbacks] = useState([]);
+  const [roomsData, setRoomsData] = useState([]);
+  const [bookingsData, setBookingsData] = useState([]);
+  const [user, setUser] = useState({ full_name: "Guest" });
+ 
 
-  const handleFeedbackSubmit = (e) => {
+
+
+  // Feedback submit handler
+  const handleFeedbackSubmit = async (e) => {
     e.preventDefault();
+
+    // Get logged-in user
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) return alert("Please login first.");
+
+    // Insert feedback into Supabase
+    const { error } = await supabase.from("feedback").insert([
+      { user_id: user.id, message: feedbackInput }
+    ]);
+
+    if (error) return alert(error.message);
+
     const newFeedback = {
-      id: feedbacks.length + 1,
       message: feedbackInput,
       date: new Date().toLocaleDateString(),
     };
+
     setFeedbacks([newFeedback, ...feedbacks]);
     setFeedbackInput("");
     setFeedbackModalOpen(false);
   };
 
-  const handleBookNow = (room) => {
-    alert(`Booking request for ${room.name} has been initiated!`);
+
+  // Fetch rooms
+  const fetchRooms = async () => {
+    const { data, error } = await supabase.from("rooms").select("*");
+    if (!error) setRoomsData(data);
   };
+
+  // Fetch bookings
+  const fetchBookings = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("bookings")
+      .select("*, rooms(name)")
+      .eq("user_id", user.id);
+
+    if (!error) setBookingsData(data.map(b => ({
+      ...b,
+      room: b.rooms.name,
+      checkIn: b.check_in,
+      checkOut: b.check_out
+    })));
+  };
+
+  // Fetch feedbacks
+  const fetchFeedback = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase
+      .from("feedback")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    setFeedbacks(data.map(f => ({
+      message: f.message,
+      date: new Date(f.created_at).toLocaleDateString()
+    })));
+  };
+
+
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (!authUser) return;
+
+      // Fetch name from your users table
+      const { data, error } = await supabase
+        .from("users")
+        .select("full_name")
+        .eq("id", authUser.id)
+        .single();
+
+      if (!error && data) setUser({ full_name: data.full_name });
+    };
+
+    fetchUser();
+  }, []);
+
+  useEffect(() => {
+    fetchRooms();
+    fetchBookings();
+    fetchFeedback();
+  }, []);
+
+
 
   return (
     <div className="flex-1 p-8 bg-gradient-to-br from-gray-700 to-gray-400 min-h-screen">
       {/* Header */}
-      <header className="mb-12">
-        <h1 className="text-4xl font-extrabold text-black tracking-tight">
-          Welcome, Guest 
-        </h1>
-        <p className="text-white mt-2 text-lg">
-          Explore rooms, manage bookings, and share your experience.
-        </p>
+      <header className="mb-12 flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-extrabold text-black tracking-tight">
+            Welcome, {user.full_name} 
+          </h1>
+          <p className="text-white mt-2 text-lg">
+            Explore rooms, manage bookings, and share your experience.
+          </p>
+        </div>
+
+        <NavLink to="/login">
+          <LogOut />
+        </NavLink>
       </header>
+
 
       {/* Action Cards */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
@@ -116,7 +197,7 @@ export default function Guest() {
                       b.status === "Confirmed" ? "text-green-600" : "text-yellow-600"
                     }`}
                   >
-                    {b.status}
+                    {b.booking_status}
                   </td>
                 </tr>
               ))}
@@ -163,9 +244,11 @@ export default function Guest() {
                   </td>
                   <td className="px-4 py-3">
                     {r.status === "Available" ? (
+                      <NavLink to="/guest/rooms">
                       <button className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition shadow">
                         Book Now
                       </button>
+                      </NavLink>
                     ) : (
                       <span className="text-gray-400">N/A</span>
                     )}

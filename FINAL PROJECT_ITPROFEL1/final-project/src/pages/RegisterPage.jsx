@@ -18,54 +18,40 @@ export default function RegisterPage() {
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
+  e.preventDefault();
+  setLoading(true);
 
-    const { name: full_name, email, password, role } = formData;
+  const { name: full_name, email, password, role } = formData;
 
-    try {
-    
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+  try {
+    const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        data: { full_name, role }, 
+      },
     });
 
-      if (authError) throw authError;
+    if (authError) throw authError;
 
-      const userId = authData?.user?.id;
+    const userId = authData?.user?.id;
+    if (!userId) throw new Error("Failed to get user ID");
 
-      if (!userId) {
-        alert("Failed to register user.");
-        setLoading(false);
-        return;
-      }
+    const { error: dbError } = await supabase.from("users").insert([
+      { id: userId, full_name, email, role }
+    ]);
 
-      
-      const { error: dbError } = await supabase.from("users").insert([
-        {
-          id: userId,
-          full_name,
-          email,
-          role,
-        },
-      ]);
+    if (dbError) throw dbError;
 
-      if (!userId) {
-      setLoading(false);
-      navigate("/login");
-      return;
-    }
+    alert("Registration successful!");
+    navigate("/login");
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
-      if (dbError) throw dbError;
-
-      alert("Registration successful! You can now log in.");
-      setLoading(false);
-      navigate("/login");
-    } catch (error) {
-      alert(error.message);
-      setLoading(false);
-    }
-  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-gray-600 to-gray-200 px-6 relative overflow-hidden">

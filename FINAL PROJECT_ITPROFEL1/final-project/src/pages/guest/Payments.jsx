@@ -1,25 +1,77 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import supabase from "../../lib/supabase";
 
 export default function Payments() {
-  const payments = [
-    { id: 1, bookingId: "BK-1001", room: "Deluxe Suite", amount: 5000, status: "Pending", date: "2025-11-20" },
-    { id: 2, bookingId: "BK-1002", room: "Standard Room", amount: 4500, status: "Paid", date: "2025-11-15" },
-  ];
-
+  const [payments, setPayments] = useState([]);
   const [openModal, setOpenModal] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState("");
+
+  // ================== FETCH PAYMENTS ==================
+  const fetchPayments = async () => {
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) return;
+
+    // fetch payments joined with bookings and rooms
+    const { data, error } = await supabase
+      .from("payments")
+      .select(`
+        id,
+        payment_status,
+        booking_id,
+        payment_amount,
+        bookings!inner(
+          id,
+          check_in,
+          room_id,
+          rooms!inner(
+            name,
+            price
+          )
+        )
+      `)
+      .eq("bookings.user_id", user.id); 
+
+    if (error) {
+      console.error("Fetch error:", error.message);
+      return;
+    }
+
+    setPayments(
+      data.map((p) => ({
+        id: p.id,
+        bookingId: `BK-${p.booking_id.slice(0, 4).toUpperCase()}`,
+        room: p.bookings.rooms.name,
+        amount: p.payment_amount || p.bookings.rooms.price || 0,
+        date: p.bookings.check_in,
+        status: p.payment_status,
+      }))
+    );
+  };
+
+  useEffect(() => {
+    fetchPayments();
+  }, []);
 
   const openPaymentModal = (payment) => {
     setSelectedPayment(payment);
     setOpenModal(true);
   };
 
-  const handlePaymentSubmit = (e) => {
+  const handlePaymentSubmit = async (e) => {
     e.preventDefault();
+
+    const { error } = await supabase
+      .from("payments")
+      .update({ payment_status: "Paid" })
+      .eq("id", selectedPayment.id);
+
+    if (error) return alert("Payment failed: " + error.message);
+
     alert(`Payment successful via ${paymentMethod}!`);
     setOpenModal(false);
     setPaymentMethod("");
+    fetchPayments(); 
   };
 
   return (
@@ -74,12 +126,10 @@ export default function Payments() {
         </table>
       </div>
 
-      {/* PAYMENT METHOD MODAL */}
+      {/* PAYMENT MODAL */}
       {openModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-6 z-50 animate-fadeIn">
           <div className="bg-white/90 backdrop-blur-xl w-full max-w-md p-8 rounded-3xl shadow-2xl border border-white relative animate-fadeInDown">
-
-            {/* CLOSE BUTTON */}
             <button
               onClick={() => setOpenModal(false)}
               className="absolute top-4 right-4 text-gray-600 hover:text-black text-2xl"
@@ -88,12 +138,9 @@ export default function Payments() {
             </button>
 
             <h2 className="text-3xl font-extrabold text-gray-900 mb-4">Complete Payment</h2>
-            <p className="text-gray-700 text-lg mb-4">
-              <strong>{selectedPayment.room}</strong>
-            </p>
+            <p className="text-gray-700 text-lg mb-4"><strong>{selectedPayment.room}</strong></p>
             <p className="text-gray-700 mb-6">
-              Total Amount:{" "}
-              <span className="font-bold text-blue-700">₱{selectedPayment.amount.toLocaleString()}</span>
+              Total Amount: <span className="font-bold text-blue-700">₱{selectedPayment.amount.toLocaleString()}</span>
             </p>
 
             <form onSubmit={handlePaymentSubmit} className="space-y-6">
@@ -129,14 +176,11 @@ export default function Payments() {
                 >
                   Cancel
                 </button>
-
                 <button
                   type="submit"
                   disabled={!paymentMethod}
                   className={`px-5 py-3 text-white rounded-xl transition shadow-md ${
-                    paymentMethod
-                      ? "bg-green-600 hover:bg-green-700"
-                      : "bg-gray-400 cursor-not-allowed"
+                    paymentMethod ? "bg-green-600 hover:bg-green-700" : "bg-gray-400 cursor-not-allowed"
                   }`}
                 >
                   Confirm Payment

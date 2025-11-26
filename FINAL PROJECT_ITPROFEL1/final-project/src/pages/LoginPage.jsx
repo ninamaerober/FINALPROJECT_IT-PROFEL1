@@ -18,12 +18,11 @@ export default function LoginPage() {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    setLoading(true); // Show spinner
+    setLoading(true); 
     console.log("Login attempt:", formData);
 
-    // Simulate async login (replace with actual API call)
     setTimeout(() => {
-      setLoading(false); // Hide spinner
+      setLoading(false); 
       alert(`Logged in as ${formData.role} with email ${formData.email}`);
 
       if (formData.role === "admin") navigate("/admin");
