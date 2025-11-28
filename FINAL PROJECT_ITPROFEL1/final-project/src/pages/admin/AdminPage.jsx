@@ -33,17 +33,37 @@ export default function Admin() {
   const fetchData = async () => {
     const { data: roomsData } = await supabase.from("rooms").select("*");
     setRooms(roomsData || []);
-    const { data: bookingsData } = await supabase.from("bookings").select("*");
+    const { data: bookingsData, error } = await supabase
+  .from("bookings")
+  .select(`
+    id,
+    check_in,
+    check_out,
+    booking_status,
+    guest_name,
+    room_id,
+    user_id,
+    users(full_name)
+  `);
+
+if (error) console.log(error);
+setBookings(bookingsData || []);
+
     setBookings(bookingsData || []);
     const { data: promotionsData } = await supabase.from("promotions").select("*");
     setPromotions(promotionsData || []);
-    const { data: usersData } = await supabase.from("users").select("*");
-    setUsers(usersData || []);
+    const { data: usersData } = await supabase
+  .from("users")
+  .select("id, full_name")
+  .eq("role", "guest");
+setUsers(usersData || []);
+
   };
 
   useEffect(() => {
     fetchData();
       fetchPaymentsSummary();
+      fetchUsers();
 
   }, []);
 
@@ -53,33 +73,81 @@ export default function Admin() {
 
   // ===================== HANDLERS =====================
 
-  // ---- ROOM ----
-  const handleAddRoom = async () => {
-    if (!newRoom.name || !newRoom.type || !newRoom.price) return alert("Fill all room fields");
+ const uploadRoomImage = async (file) => {
+  if (!file) return null;
 
-    try {
-      let error = null;
-      if (editingRoom) {
-        const { error: updateError } = await supabase
-          .from("rooms")
-          .update({ ...newRoom, price: Number(newRoom.price) })
-          .eq("id", editingRoom.id);
-        error = updateError;
-      } else {
-        const { error: insertError } = await supabase
-          .from("rooms")
-          .insert([{ ...newRoom, price: Number(newRoom.price) }]);
-        error = insertError;
-      }
-      if (error) throw error;
-      setNewRoom(defaultRoom);
-      setEditingRoom(null);
-      setRoomModalOpen(false);
-      fetchData();
-    } catch (err) {
-      alert(err.message || "Room error");
+  const fileName = `${Date.now()}_${file.name}`;
+
+  // Upload the file
+  const { data, error } = await supabase.storage
+    .from("room-images")
+    .upload(fileName, file);
+
+  if (error) {
+    console.error("Upload error:", error.message);
+    return null;
+  }
+
+  // Get public URL
+  const { data: urlData, error: urlError } = supabase.storage
+    .from("room-images")
+    .getPublicUrl(fileName);
+
+  if (urlError) {
+    console.error("Error getting public URL:", urlError.message);
+    return null;
+  }
+
+  return urlData.publicUrl;
+};
+
+
+
+
+  // ---- ROOM ----
+   const handleAddRoom = async () => {
+  if (!newRoom.name || !newRoom.type || !newRoom.price) return alert("Fill all room fields");
+
+  try {
+    let imageUrl = null;
+    if (newRoom.imageFile) {
+      imageUrl = await uploadRoomImage(newRoom.imageFile);
     }
-  };
+
+    const payload = {
+      name: newRoom.name,
+      type: newRoom.type,
+      price: Number(newRoom.price),
+      status: newRoom.status,
+      image: imageUrl, // <-- store URL here
+    };
+
+    let error = null;
+    if (editingRoom) {
+      const { error: updateError } = await supabase
+        .from("rooms")
+        .update(payload)
+        .eq("id", editingRoom.id);
+      error = updateError;
+    } else {
+      const { error: insertError } = await supabase
+        .from("rooms")
+        .insert([payload]);
+      error = insertError;
+    }
+
+    if (error) throw error;
+
+    setNewRoom(defaultRoom);
+    setEditingRoom(null);
+    setRoomModalOpen(false);
+    fetchData();
+  } catch (err) {
+    alert(err.message || "Room error");
+  }
+};
+
+
 
   const handleDeleteRoom = async (id) => {
     if (!window.confirm("Delete this room?")) return;
@@ -150,33 +218,33 @@ export default function Admin() {
     setBookingModalOpen(true);
   };
 
-  // ---- PROMOTION ----
-  const handleAddPromotion = async () => {
-    if (!newPromotion.title || !newPromotion.discount) return alert("Fill all promotion fields");
+// ---- PROMOTION ----
+const handlePromotionChange = (e) => {
+  const { name, value } = e.target;
+  setNewPromotion({ ...newPromotion, [name]: value });
+};
 
-    try {
-      let error = null;
-      if (editingPromotion) {
-        const { error: updateError } = await supabase
-          .from("promotions")
-          .update({ ...newPromotion, discount: Number(newPromotion.discount) })
-          .eq("id", editingPromotion.id);
-        error = updateError;
-      } else {
-        const { error: insertError } = await supabase
-          .from("promotions")
-          .insert([{ ...newPromotion, discount: Number(newPromotion.discount) }]);
-        error = insertError;
-      }
-      if (error) throw error;
-      setNewPromotion(defaultPromotion);
-      setEditingPromotion(null);
-      setPromotionModalOpen(false);
-      fetchData();
-    } catch (err) {
-      alert(err.message || "Promotion error");
-    }
-  };
+const handleAddPromotion = async () => {
+  if (!newPromotion.title || !newPromotion.discount)
+    return alert("Please fill in all fields");
+
+  const { error } = await supabase.from("promotions").insert([
+    {
+      title: newPromotion.title,
+      discount: parseFloat(newPromotion.discount),
+      status: newPromotion.status,
+    },
+  ]);
+
+  if (error) return alert("Failed to add promotion: " + error.message);
+
+  alert("Promotion added successfully!");
+
+  setNewPromotion({ id: null, title: "", discount: "", status: "Inactive" });
+  fetchData(); // refresh promotions
+};
+  
+
 
   const handleDeletePromotion = async (id) => {
     if (!window.confirm("Delete this promotion?")) return;
@@ -191,18 +259,13 @@ export default function Admin() {
   };
 
   const fetchPaymentsSummary = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return;
-
-  // Fetch all payments for the logged-in user via bookings
+  // Fetch all payments with booking info
   const { data, error } = await supabase
     .from("payments")
     .select(`
       payment_amount,
-      payment_status,
-      bookings!inner(user_id)
-    `)
-    .eq("bookings.user_id", user.id);
+      payment_status
+    `);
 
   if (error) {
     console.error("Error fetching payments summary:", error.message);
@@ -211,15 +274,27 @@ export default function Admin() {
 
   const paidTotal = data
     .filter(p => p.payment_status === "Paid")
-    .reduce((sum, p) => sum + p.payment_amount, 0);
+    .reduce((sum, p) => sum + Number(p.payment_amount), 0);
 
   const pendingTotal = data
     .filter(p => p.payment_status === "Pending")
-    .reduce((sum, p) => sum + p.payment_amount, 0);
+    .reduce((sum, p) => sum + Number(p.payment_amount), 0);
 
   setTotalRevenue(paidTotal);
   setPendingPayments(pendingTotal);
 };
+
+
+const fetchUsers = async () => {
+  const { data, error } = await supabase
+    .from("users")
+    .select("id, full_name, role")
+    .eq("role", "guest");  // 🔥 only guests
+
+  if (error) return console.error(error);
+  setUsers(data);
+};
+
 
 
   return (
@@ -281,7 +356,7 @@ export default function Admin() {
                 onClick={() => {
                   setRoomModalOpen(false);
                   setEditingRoom(null);
-                  setNewRoom({ id: null, name: "", type: "", price: "", status: "Available" });
+                  setNewRoom({ id: null, name: "", type: "", price: "", status: "Available", imageFile: null });
                 }}
                 className="text-gray-600 text-xl"
               >
@@ -372,15 +447,18 @@ export default function Admin() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
         {/* Guest selection */}
         <select
-          value={newBooking.userId}
-          onChange={(e) => setNewBooking({ ...newBooking, userId: e.target.value })}
-          className="p-4 border rounded-xl"
-        >
-          <option value="">Select Guest</option>
-          {users.map(u => (
-            <option key={u.id} value={u.id}>{u.full_name}</option>
-          ))}
-        </select>
+  value={newBooking.userId}
+  onChange={(e) => setNewBooking({ ...newBooking, userId: e.target.value })}
+  className="p-4 border rounded-xl"
+>
+  <option value="">Select Guest</option>
+  {users.map((u) => (
+    <option key={u.id} value={u.id}>
+      {u.full_name}
+    </option>
+  ))}
+</select>
+
 
         {/* Room selection */}
         <select
@@ -455,7 +533,9 @@ export default function Admin() {
         <tbody>
           {bookings.map(b => (
             <tr key={b.id} className="border-b">
-              <td className="px-4 py-2">{users.find(u => u.id === b.user_id)?.full_name || "Unknown"}</td>
+<td className="px-4 py-2">
+  {b.guest_name || b.users?.full_name || "Unknown"}
+</td>
               <td className="px-4 py-2">{rooms.find(r => r.id === b.room_id)?.name || "Unknown"}</td>
               <td className="px-4 py-2">{b.check_in}</td>
               <td className="px-4 py-2">{b.check_out}</td>
@@ -509,20 +589,44 @@ export default function Admin() {
             </div>
 
             {/* Promotion Form */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-              <input type="text" placeholder="Title" value={newPromotion.title} onChange={(e) => setNewPromotion({ ...newPromotion, title: e.target.value })} className="p-4 border rounded-xl" />
-              <input type="number" placeholder="Discount %" value={newPromotion.discount} onChange={(e) => setNewPromotion({ ...newPromotion, discount: e.target.value })} className="p-4 border rounded-xl" />
-              <select value={newPromotion.status} onChange={(e) => setNewPromotion({ ...newPromotion, status: e.target.value })} className="p-4 border rounded-xl">
-                <option value="Inactive">Inactive</option>
-                <option value="Active">Active</option>
-              </select>
-            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+  <input
+    type="text"
+    name="title"
+    placeholder="Promotion Title"
+    value={newPromotion.title}
+    onChange={handlePromotionChange}
+    className="p-4 border rounded-xl"
+  />
 
-            <div className="flex justify-end gap-4 mb-6">
-              <button onClick={() => setPromotionModalOpen(false)} className="px-6 py-2 bg-gray-300 rounded-xl">Close</button>
-              <button onClick={handleAddPromotion} className="px-6 py-2 bg-blue-600 text-white rounded-xl">{editingPromotion ? "Save Changes" : "Add Promotion"}</button>
-            </div>
+  <input
+    type="number"
+    name="discount"
+    placeholder="Discount %"
+    value={newPromotion.discount}
+    onChange={handlePromotionChange}
+    className="p-4 border rounded-xl"
+  />
 
+  <select
+    name="status"
+    value={newPromotion.status}
+    onChange={handlePromotionChange}
+    className="p-4 border rounded-xl"
+  >
+    <option value="Active">Active</option>
+    <option value="Inactive">Inactive</option>
+  </select>
+</div>
+
+            <div className="flex justify-end gap-4">
+  <button onClick={() => setPromotionModalOpen(false)} className="px-6 py-2 bg-gray-300 rounded-xl">
+    Close
+  </button>
+  <button onClick={handleAddPromotion} className="px-6 py-2 bg-blue-600 text-white rounded-xl">
+    Add Promotion
+  </button>
+</div>
             {/* Promotion Table */}
             <table className="w-full text-left">
               <thead>

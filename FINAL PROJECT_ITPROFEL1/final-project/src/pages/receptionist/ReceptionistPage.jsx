@@ -1,28 +1,18 @@
-import React, { useState } from "react";
-
-const bookingsDataInitial = [
-  { id: 1, guest: "John Doe", room: "Deluxe Suite", checkIn: "2025-11-20", checkOut: "2025-11-22", status: "Confirmed" },
-  { id: 2, guest: "Jane Smith", room: "Standard Room", checkIn: "2025-11-21", checkOut: "2025-11-23", status: "Pending" },
-];
-
-const roomsDataInitial = [
-  { id: 1, name: "Deluxe Suite", type: "Suite", status: "Available" },
-  { id: 2, name: "Standard Room", type: "Standard", status: "Available" },
-  { id: 3, name: "Executive Room", type: "Executive", status: "Available" },
-  { id: 4, name: "Presidential Suite", type: "Executive", status: "Occupied" },
-];
+import React, { useState, useEffect } from "react";
+import supabase from "../../lib/supabase";
+import { Navigate, NavLink } from "react-router";
+import { LogOut } from "react-feather";
 
 export default function Receptionist() {
-  const [bookings, setBookings] = useState(bookingsDataInitial);
-  const [rooms, setRooms] = useState(roomsDataInitial);
-
+  const [bookings, setBookings] = useState([]);
+  const [rooms, setRooms] = useState([]);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [checkinModalOpen, setCheckinModalOpen] = useState(false);
   const [roomModalOpen, setRoomModalOpen] = useState(false);
 
   const [newBooking, setNewBooking] = useState({
     guest: "",
-    room: rooms[0].name,
+    room: "",
     checkIn: "",
     checkOut: "",
     status: "Pending",
@@ -31,46 +21,168 @@ export default function Receptionist() {
   const [selectedBooking, setSelectedBooking] = useState(null);
   const [selectedRoom, setSelectedRoom] = useState(null);
 
-  // ----- Handlers -----
-  const handleBookingSubmit = (e) => {
-    e.preventDefault();
-    const newId = bookings.length + 1;
-    setBookings([...bookings, { id: newId, ...newBooking }]);
-    setNewBooking({ guest: "", room: rooms[0].name, checkIn: "", checkOut: "", status: "Pending" });
+  useEffect(() => {
+    fetchBookings();
+    fetchRooms();
+  }, []);
+
+  const fetchBookings = async () => {
+  const { data, error } = await supabase
+    .from("bookings")
+    .select(`
+      id,
+      booking_status,
+      check_in,
+      check_out,
+      guest_name,
+      room:rooms(name),
+      guest:users(full_name)
+    `)
+    .order("check_in", { ascending: false });
+
+  if (error) {
+    console.error("Error fetching bookings:", error);
+    return;
+  }
+
+  // Map snake_case / nested data to easy-to-use structure
+  const mapped = data.map(b => ({
+  id: b.id,
+  guest: b.guest?.full_name || b.guest_name , // from users table
+  room: b.room?.name || "",         // from rooms table
+  status: b.booking_status,
+  checkIn: b.check_in,
+  checkOut: b.check_out,
+}));
+
+
+  setBookings(mapped || []);
+};
+
+
+
+  const fetchRooms = async () => {
+    const { data, error } = await supabase
+      .from("rooms")
+      .select("*")
+      .order("name");
+    if (error) console.error("Error fetching rooms:", error);
+    else {
+      setRooms(data || []);
+      // default room for new booking
+      if (data?.length) setNewBooking((prev) => ({ ...prev, room: data[0].name }));
+    }
+  };
+
+  // Create Booking
+const handleBookingSubmit = async (e) => {
+  e.preventDefault();
+  if (!newBooking.room) return alert("Please select a room");
+
+  const roomObj = rooms.find(r => r.name === newBooking.room);
+  if (!roomObj) return alert("Selected room not found");
+
+  // Insert and fetch inserted row immediately
+  const { data, error } = await supabase
+    .from("bookings")
+    .insert([
+      {
+        guest_name: newBooking.guest,
+        room_id: roomObj.id,
+        check_in: newBooking.checkIn,
+        check_out: newBooking.checkOut,
+        booking_status: newBooking.status,
+      },
+    ])
+    .select(`
+      id,
+      guest_name,
+      room:rooms(name),
+      check_in,
+      check_out,
+      booking_status
+    `); // ensures nested room info comes too
+
+  if (error) {
+    console.error("Insert booking error:", error);
+  } else if (data && data.length > 0) {
+    const mappedBooking = {
+      id: data[0].id,
+      guest: data[0].guest_name,
+      room: data[0].room?.name || "",
+      checkIn: data[0].check_in,
+      checkOut: data[0].check_out,
+      status: data[0].booking_status,
+    };
+    setBookings([mappedBooking, ...bookings]); // direct fetch into state
+    setNewBooking({ guest: "", room: rooms[0]?.name || "", checkIn: "", checkOut: "", status: "Pending" });
     setCreateModalOpen(false);
-  };
+  } else {
+    console.error("No data returned from insert");
+  }
+};
 
-  const handleCheckinSubmit = (e) => {
+
+  // Update Booking Status
+  const handleCheckinSubmit = async (e) => {
+  e.preventDefault();
+  if (!selectedBooking) return;
+
+  const { error } = await supabase
+    .from("bookings")
+    .update({ booking_status: selectedBooking.status })
+    .eq("id", selectedBooking.id);
+
+  if (error) {
+    console.error("Update booking error:", error);
+    return;
+  }
+
+  // Update local state so table reflects new status
+  setBookings(
+    bookings.map((b) =>
+      b.id === selectedBooking.id ? { ...b, status: selectedBooking.status } : b
+    )
+  );
+
+  // Close modal
+  setSelectedBooking(null);
+  setCheckinModalOpen(false);
+};
+
+
+  // Update Room Status
+  const handleRoomUpdate = async (e) => {
     e.preventDefault();
-    setBookings(
-      bookings.map((b) =>
-        b.id === selectedBooking.id ? { ...b, status: selectedBooking.status } : b
-      )
-    );
-    setSelectedBooking(null);
-    setCheckinModalOpen(false);
+    if (!selectedRoom) return;
+    const { error } = await supabase
+      .from("rooms")
+      .update({ status: selectedRoom.status })
+      .eq("id", selectedRoom.id);
+    if (error) console.error("Update room error:", error);
+    else {
+      setRooms(rooms.map(r => (r.id === selectedRoom.id ? { ...r, status: selectedRoom.status } : r)));
+      setSelectedRoom(null);
+      setRoomModalOpen(false);
+    }
   };
 
-  const handleRoomUpdate = (e) => {
-    e.preventDefault();
-    setRooms(
-      rooms.map((r) =>
-        r.id === selectedRoom.id ? { ...r, status: selectedRoom.status } : r
-      )
-    );
-    setSelectedRoom(null);
-    setRoomModalOpen(false);
-  };
-
-  // ----- JSX -----
   return (
     <div className="flex-1 p-8 bg-gradient-to-br from-gray-700 to-gray-400 min-h-screen">
-
       {/* Header */}
-      <header className="mb-12">
-        <h1 className="text-5xl font-extrabold text-black tracking-tight">Receptionist Dashboard</h1>
-        <p className="text-white mt-2 text-lg">Limited access: Handle bookings, check-ins, and room management efficiently.</p>
-      </header>
+      <header className="mb-12 flex items-center justify-between">
+  <div>
+    <h1 className="text-5xl font-extrabold text-black tracking-tight">Receptionist Dashboard</h1>
+    <p className="text-white mt-2 text-lg">
+      Limited access: Handle bookings, check-ins, and room management efficiently.
+    </p>
+  </div>
+
+  <NavLink to="/login" className="text-white hover:text-gray-300">
+    <LogOut className="w-8 h-8" />
+  </NavLink>
+</header>
+
 
       {/* Quick Action Cards */}
       <section className="mb-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -91,63 +203,49 @@ export default function Receptionist() {
           <p className="text-white/80 mb-4">Update guest status.</p>
           <span className="text-white font-semibold">Go &rarr;</span>
         </button>
-
-        <button
-          onClick={() => setRoomModalOpen(true)}
+       
+        <button onClick={() => setRoomModalOpen(true)}
           className="bg-white/10 backdrop-blur-xl shadow-2xl border border-blue-500 rounded-3xl p-10 w-full max-w-md relative z-10"
         >
           <h2 className="text-xl font-semibold mb-2">Room Status</h2>
           <p className="text-white/80 mb-4">Update room availability.</p>
-          <span className="text-white font-semibold">Go &rarr;</span>
+          <span className="text-white font-semibold">Go &rarr; </span>
         </button>
       </section>
 
       {/* Recent Bookings Table */}
       <section className="mb-12">
         <h2 className="text-3xl font-semibold text-gray-800 mb-6">Recent Bookings</h2>
-
         <div className="overflow-x-auto bg-gray-50 border border-gray-200 rounded-3xl shadow-xl">
           <table className="min-w-full text-left border-collapse">
-          <thead className="bg-gray-100">
-        <tr>
-          {["Guest", "Room", "Check-In", "Check-Out", "Status"].map((th, i) => (
-            <th
-              key={i}
-              className="px-6 py-3 text-gray-700 font-medium uppercase tracking-wider"
-            >
-              {th}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {bookings.map((b) => (
-          <tr
-            key={b.id}
-            className="border-b border-gray-200 hover:bg-gray-100 transition-all"
-          >
-            <td className="px-6 py-4">{b.guest}</td>
-            <td className="px-6 py-4">{b.room}</td>
-            <td className="px-6 py-4">{b.checkIn}</td>
-            <td className="px-6 py-4">{b.checkOut}</td>
-            <td
-              className={`px-6 py-4 font-semibold rounded-full text-center w-32 ${
-                b.status === "Confirmed"
-                  ? "bg-green-100 text-green-700"
-                  : b.status === "Checked In"
-                  ? "bg-blue-100 text-blue-700"
-                  : "bg-yellow-100 text-yellow-700"
-              }`}
-            >
-              {b.status}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-</section>
-
+            <thead className="bg-gray-100">
+              <tr>
+                {["Guest", "Room", "Check-In", "Check-Out", "Status"].map((th, i) => (
+                  <th key={i} className="px-6 py-3 text-gray-700 font-medium uppercase tracking-wider">{th}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bookings.map((b) => (
+                <tr key={b.id} className="border-b border-gray-200 hover:bg-gray-100 transition-all">
+                  <td className="px-6 py-4">{b.guest}</td>
+                  <td className="px-6 py-4">{b.room}</td>
+                  <td className="px-6 py-4">{b.checkIn}</td>
+                  <td className="px-6 py-4">{b.checkOut}</td>
+                  <td className={`px-6 py-4 font-semibold rounded-full text-center w-32 ${
+                    b.status === "Confirmed" ? "bg-green-100 text-green-700" :
+                    b.status === "Checked In" ? "bg-blue-100 text-blue-700" :
+                    b.status === "Checked Out" ? "bg-gray-100 text-gray-700" :
+                    "bg-yellow-100 text-yellow-700"
+                  }`}>
+                    {b.status}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {/* Rooms Status Table */}
       <section className="mb-12">
@@ -292,36 +390,36 @@ export default function Receptionist() {
         <div>
           <label className="block text-gray-700 font-medium mb-2">Select Booking</label>
           <select
-            value={selectedBooking?.id || ""}
-            onChange={(e) => setSelectedBooking(bookings.find((b) => b.id === parseInt(e.target.value)))}
-            className="w-full border border-gray-300 rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 shadow-sm"
-            required
-          >
-            <option value="" disabled>Select booking</option>
-            {bookings.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.guest} - {b.room} ({b.status})
-              </option>
-            ))}
-          </select>
+  value={selectedBooking?.id || ""}
+  onChange={(e) =>
+    setSelectedBooking(bookings.find((b) => b.id.toString() === e.target.value))
+  }
+  required
+>
+  <option value="" disabled>Select booking</option>
+  {bookings.map((b) => (
+    <option key={b.id} value={b.id}>
+      {b.guest} - {b.room} ({b.status})
+    </option>
+  ))}
+</select>
         </div>
 
         {/* Status Update */}
         {selectedBooking && (
-          <div>
-            <label className="block text-gray-700 font-medium mb-2">Update Status</label>
-            <select
-              value={selectedBooking.status}
-              onChange={(e) => setSelectedBooking({ ...selectedBooking, status: e.target.value })}
-              className="w-full border border-gray-300 rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 shadow-sm"
-            >
-              <option value="Pending">Pending</option>
-              <option value="Confirmed">Confirmed</option>
-              <option value="Checked In">Checked In</option>
-              <option value="Checked Out">Checked Out</option>
-            </select>
-          </div>
-        )}
+  <select
+    value={selectedBooking.status || "Pending"}
+    onChange={(e) =>
+      setSelectedBooking({ ...selectedBooking, status: e.target.value })
+    }
+  >
+    <option value="Pending">Pending</option>
+    <option value="Confirmed">Confirmed</option>
+    <option value="Checked In">Checked In</option>
+    <option value="Checked Out">Checked Out</option>
+  </select>
+)}
+
 
         {/* Buttons */}
         <div className="flex justify-end gap-4 mt-6">
@@ -349,7 +447,7 @@ export default function Receptionist() {
        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
        <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-5xl p-8 animate-fadeIn">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div id="room" className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-gray-800">Room Status</h2>
         <button 
           onClick={() => setRoomModalOpen(false)} 

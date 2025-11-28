@@ -30,9 +30,11 @@ export default function Guest() {
     if (error) return alert(error.message);
 
     const newFeedback = {
-      message: feedbackInput,
-      date: new Date().toLocaleDateString(),
-    };
+  id: Date.now(), // temporary key for frontend
+  message: feedbackInput,
+  date: new Date().toLocaleDateString(),
+};
+
 
     setFeedbacks([newFeedback, ...feedbacks]);
     setFeedbackInput("");
@@ -276,12 +278,13 @@ export default function Guest() {
                 </tr>
               </thead>
               <tbody>
-                {feedbacks.map((f) => (
-                  <tr key={f.id} className="border-b text-gray-800">
-                    <td className="px-4 py-3">{f.date}</td>
-                    <td className="px-4 py-3">{f.message}</td>
-                  </tr>
-                ))}
+                {feedbacks.map((f, idx) => (
+  <tr key={f.id || idx} className="border-b text-gray-800">
+    <td className="px-4 py-3">{f.date}</td>
+    <td className="px-4 py-3">{f.message}</td>
+  </tr>
+))}
+
               </tbody>
             </table>
           </div>

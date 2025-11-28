@@ -11,21 +11,36 @@ export default function Payment() {
     amount: "",
     status: "Pending",
   });
+  const [activePromotion, setActivePromotion] = useState(null);
 
-  const getActivePromotion = () => ({ title: "Holiday Sale", discount: 10 });
+  // ================= FETCH ACTIVE PROMOTION =================
+  const fetchActivePromotion = async () => {
+    const { data, error } = await supabase
+      .from("promotions")
+      .select("title, discount, status")
+      .eq("status", "Active")
+      .order("id", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!error && data) {
+      setActivePromotion(data);
+    } else {
+      setActivePromotion(null);
+    }
+  };
 
   // ================= FETCH BOOKINGS =================
   const fetchBookings = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
     const { data, error } = await supabase
       .from("bookings")
-      .select("id, users(full_name)")
-      .eq("user_id", user.id);
+      .select(`
+        id,
+        guest_name,
+        users(full_name)
+      `);
 
     if (error) return console.error("Error fetching bookings:", error.message);
-
     setBookings(data);
   };
 
@@ -41,7 +56,10 @@ export default function Payment() {
         payment_amount,
         payment_status,
         booking_id,
-        bookings(id, users(full_name))
+        bookings(
+          guest_name,
+          users(full_name)
+        )
       `)
       .eq("user_id", user.id);
 
@@ -50,7 +68,10 @@ export default function Payment() {
     setPayments(
       data.map((p) => ({
         id: p.id,
-        guest: p.bookings?.users?.full_name || "Unknown",
+        guest:
+          p.bookings?.users?.full_name || // registered user
+          p.bookings?.guest_name ||        // walk-in / manual guest
+          "Unknown",
         amount: p.payment_amount,
         status: p.payment_status,
         booking_id: p.booking_id,
@@ -61,29 +82,35 @@ export default function Payment() {
   useEffect(() => {
     fetchBookings();
     fetchPayments();
+    fetchActivePromotion();
   }, []);
 
-  // ================= HANDLE INPUT CHANGE =================
+  // ================= INPUT HANDLER =================
   const handlePaymentChange = (e) => {
     const { name, value } = e.target;
     setNewPayment({ ...newPayment, [name]: value });
   };
 
   // ================= ADD PAYMENT =================
-  const handleAddPayment = async () => {
-  if (!newPayment.guest || !newPayment.amount) {
+  // ================= ADD PAYMENT =================
+const handleAddPayment = async () => {
+  if (!newPayment.guest || !newPayment.amount)
     return alert("Fill all required fields");
-  }
-
-  const bookingId = newPayment.guest; 
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return alert("User not logged in");
 
+  // Apply promotion discount
+  let finalAmount = parseFloat(newPayment.amount);
+  if (activePromotion) {
+    const discountValue = finalAmount * (activePromotion.discount / 100);
+    finalAmount -= discountValue;
+  }
+
   const { error } = await supabase.from("payments").insert([
     {
-      booking_id: bookingId,
-      payment_amount: parseFloat(newPayment.amount),
+      booking_id: newPayment.guest,
+      payment_amount: finalAmount,
       payment_status: newPayment.status,
       user_id: user.id,
     },
@@ -96,7 +123,7 @@ export default function Payment() {
 };
 
 
-  // ================= UPDATE PAYMENT STATUS =================
+  // ================= UPDATE STATUS =================
   const handleStatusChange = async (id, newStatus) => {
     const { error } = await supabase
       .from("payments")
@@ -115,28 +142,36 @@ export default function Payment() {
       <h2 className="text-5xl font-extrabold text-black">Payment Management</h2>
 
       <div className="mb-8 p-5 m-5 rounded-2xl bg-white/10 backdrop-blur-md shadow-lg border border-white/20">
-        <p className="text-sm text-green-300 tracking-wide">
-          🎉 Active Promotion: <strong>"{getActivePromotion().title}"</strong> — {getActivePromotion().discount}% discount applied
-        </p>
+        {activePromotion ? (
+          <p className="text-sm text-green-300 tracking-wide">
+            🎉 Active Promotion: <strong>"{activePromotion.title}"</strong> —{" "}
+            {activePromotion.discount}% discount applied
+          </p>
+        ) : (
+          <p className="text-sm text-red-300 tracking-wide">
+            🚫 No active promotions at the moment
+          </p>
+        )}
       </div>
 
       {/* Add Payment */}
       <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-6 rounded-3xl shadow-xl mb-10">
         <h3 className="text-xl font-semibold mb-4">Add Payment</h3>
+
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <select
-  name="guest"
-  value={newPayment.guest}
-  onChange={handlePaymentChange}
-  className="p-4 rounded-xl  border text-black focus:ring-2 focus:ring-blue-300 focus:outline-none"
->
-  <option value="">Select Guest / Booking</option>
-  {bookings.map((b) => (
-    <option key={b.id} value={b.id}>
-      {b.users.full_name}
-    </option>
-  ))}
-</select>
+            name="guest"
+            value={newPayment.guest}
+            onChange={handlePaymentChange}
+            className="p-4 rounded-xl border text-black"
+          >
+            <option value="">Select Guest / Booking</option>
+            {bookings.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.users?.full_name || b.guest_name || "Unknown Guest"}
+              </option>
+            ))}
+          </select>
 
           <input
             type="number"
@@ -144,22 +179,24 @@ export default function Payment() {
             placeholder="Amount"
             value={newPayment.amount}
             onChange={handlePaymentChange}
-            className="p-4 rounded-xl bg-white/20 border border-white/30 placeholder-gray-300 text-white focus:ring-2 focus:ring-blue-300 focus:outline-none"
+            className="p-4 rounded-xl bg-white/20 border border-white/30 placeholder-gray-300 text-white"
           />
+
           <select
             name="status"
             value={newPayment.status}
             onChange={handlePaymentChange}
-            className="p-4 rounded-xl bg-white/20 border border-white/30 text-white focus:ring-2 focus:ring-blue-300 focus:outline-none"
+            className="p-4 rounded-xl bg-white/20 border border-white/30 text-white"
           >
             <option value="Pending" className="text-black">Pending</option>
             <option value="Paid" className="text-black">Paid</option>
           </select>
         </div>
+
         <div className="flex justify-end mt-4">
           <button
             onClick={handleAddPayment}
-            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md transition text-white font-medium"
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md text-white"
           >
             Add Payment
           </button>
@@ -177,17 +214,24 @@ export default function Payment() {
             </tr>
           </thead>
           <tbody>
-            {payments.length > 0 ? (
+            {payments.length ? (
               payments.map((p) => (
-                <tr key={p.id} className="hover:bg-white/10 transition border-b border-white/10">
+                <tr
+                  key={p.id}
+                  className="hover:bg-white/10 border-b border-white/10"
+                >
                   <td className="px-6 py-4">{p.guest}</td>
                   <td className="px-6 py-4">₱{p.amount.toLocaleString()}</td>
                   <td className="px-6 py-4">
                     <select
                       value={p.status}
-                      onChange={(e) => handleStatusChange(p.id, e.target.value)}
-                      className={`bg-transparent font-semibold focus:outline-none ${
-                        p.status === "Paid" ? "text-green-400" : "text-yellow-300"
+                      onChange={(e) =>
+                        handleStatusChange(p.id, e.target.value)
+                      }
+                      className={`bg-transparent font-semibold ${
+                        p.status === "Paid"
+                          ? "text-green-400"
+                          : "text-yellow-300"
                       }`}
                     >
                       <option value="Pending" className="text-black">Pending</option>
@@ -198,7 +242,7 @@ export default function Payment() {
               ))
             ) : (
               <tr>
-                <td colSpan="3" className="text-center py-6 text-gray-300 italic">
+                <td className="text-center py-6 italic text-gray-300" colSpan="3">
                   No payments found.
                 </td>
               </tr>
@@ -210,9 +254,14 @@ export default function Payment() {
       {/* Export PDF */}
       <div className="flex justify-end mb-8">
         <PDFDownloadLink
-          document={<ReportSalesDocument payments={payments} activePromotion={getActivePromotion()} />}
+          document={
+            <ReportSalesDocument
+              payments={payments}
+              activePromotion={activePromotion}
+            />
+          }
           fileName={`Sales_Report_${new Date().toLocaleDateString()}.pdf`}
-          className="px-8 py-3 m-5 bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md transition text-white font-medium"
+          className="px-8 py-3 m-5 bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md text-white"
         >
           {({ loading }) => (loading ? "Generating..." : "Export PDF")}
         </PDFDownloadLink>
